@@ -1,4 +1,4 @@
-name: Generate Plugin Index
+name: Generate Plugin Market Index
 
 on:
   workflow_dispatch:
@@ -8,7 +8,6 @@ on:
       - master
     paths-ignore:
       - "index.json"
-      - "index.txt"
 
 permissions:
   contents: write
@@ -20,93 +19,217 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
 
-      - name: Generate index.json and index.txt
+      - name: Generate aggregated index.json from index.txt
         shell: bash
         run: |
           node <<'NODE'
           const fs = require("fs");
-          const path = require("path");
 
-          const root = process.cwd();
-          const skipDirs = new Set([
-            ".git",
-            ".github",
-            "node_modules",
-            "dist",
-            "target",
-            "coverage",
-            ".turbo",
-            ".next",
-          ]);
+          const ROOT_INDEX_TXT = "index.txt";
+          const OUTPUT_INDEX_JSON = "index.json";
 
-          function walk(dir, output = []) {
-            const entries = fs.readdirSync(dir, { withFileTypes: true });
-            const hasManifest = entries.some(
-              (entry) => entry.isFile() && entry.name === "manifest.json",
-            );
-
-            if (hasManifest && dir !== root) {
-              output.push(path.relative(root, dir).replace(/\\/g, "/"));
-              return output;
+          function normalizeRawRepoBase(repo) {
+            const trimmed = String(repo || "").trim();
+            if (!trimmed) return "";
+            if (trimmed.startsWith("https://raw.githubusercontent.com/")) {
+              return trimmed.replace(/\/+$/, "") + "/";
             }
-
-            for (const entry of entries) {
-              if (!entry.isDirectory()) continue;
-              if (skipDirs.has(entry.name)) continue;
-              walk(path.join(dir, entry.name), output);
+            if (trimmed.startsWith("https://github.com/")) {
+              return (
+                trimmed
+                  .replace(/\/+$/, "")
+                  .replace(
+                    "https://github.com/",
+                    "https://raw.githubusercontent.com/",
+                  ) + "/refs/heads/main/"
+              );
             }
-            return output;
+            return trimmed.replace(/\/+$/, "") + "/";
           }
 
-          const folders = walk(root).sort((left, right) => left.localeCompare(right));
-          const plugins = folders.map((folder) => {
-            const manifestPath = path.join(root, folder, "manifest.json");
-            const manifestText = fs.readFileSync(manifestPath, "utf8");
-            const manifest = JSON.parse(manifestText);
-            return {
-              folder,
-              manifest,
+          function buildFileUrl(repoRaw, folder, file) {
+            const normalizedRepo = repoRaw.replace(/\/+$/, "") + "/";
+            const normalizedFolder = String(folder || "")
+              .trim()
+              .replace(/\\/g, "/")
+              .replace(/^\.\/+/, "")
+              .replace(/^\/+/, "")
+              .replace(/\/+$/, "");
+            const normalizedFile = String(file || "").replace(/^\/+/, "");
+
+            if (!normalizedFolder) {
+              return normalizedFile
+                ? normalizedRepo + normalizedFile
+                : normalizedRepo;
+            }
+
+            return normalizedFile
+              ? `${normalizedRepo}${normalizedFolder}/${normalizedFile}`
+              : `${normalizedRepo}${normalizedFolder}/`;
+          }
+
+          function parseLines(text) {
+            return String(text || "")
+              .split(/\r?\n/g)
+              .map((line) => line.trim())
+              .filter((line) => line.length > 0 && !line.startsWith("#"));
+          }
+
+          async function fetchText(url) {
+            const response = await fetch(url, {
+              headers: {
+                "User-Agent": "astrobox-plugin-index-bot",
+                "Accept": "text/plain,application/json;q=0.9,*/*;q=0.8",
+              },
+            });
+            if (!response.ok) {
+              throw new Error(`HTTP ${response.status} for ${url}`);
+            }
+            return await response.text();
+          }
+
+          async function fetchJson(url) {
+            return JSON.parse(await fetchText(url));
+          }
+
+          function normalizeManifest(raw) {
+            if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+              return null;
+            }
+            const manifest = {
+              name: typeof raw.name === "string" ? raw.name : "",
+              icon: typeof raw.icon === "string" ? raw.icon : "",
+              version: typeof raw.version === "string" ? raw.version : "",
+              description:
+                typeof raw.description === "string" ? raw.description : "",
+              author: typeof raw.author === "string" ? raw.author : "",
+              website: typeof raw.website === "string" ? raw.website : "",
+              entry: typeof raw.entry === "string" ? raw.entry : "",
+              wasi_version:
+                typeof raw.wasi_version === "number"
+                  ? raw.wasi_version
+                  : Number(raw.wasi_version || 0),
+              api_level:
+                typeof raw.api_level === "number"
+                  ? raw.api_level
+                  : Number(raw.api_level || 0),
+              permissions: Array.isArray(raw.permissions)
+                ? raw.permissions.filter((item) => typeof item === "string")
+                : [],
+              additional_files: Array.isArray(raw.additional_files)
+                ? raw.additional_files.filter((item) => typeof item === "string")
+                : [],
             };
+            return manifest.name ? manifest : null;
+          }
+
+          async function loadRepoEntries(repo) {
+            const repoRaw = normalizeRawRepoBase(repo);
+            if (!repoRaw) return [];
+
+            try {
+              const repoIndex = await fetchJson(`${repoRaw}index.json`);
+              if (Array.isArray(repoIndex?.plugins)) {
+                return repoIndex.plugins
+                  .map((entry) => {
+                    const folder =
+                      typeof entry?.folder === "string" ? entry.folder : "";
+                    const manifest = normalizeManifest(entry?.manifest);
+                    if (!manifest) return null;
+                    return {
+                      repo,
+                      folder,
+                      manifest,
+                    };
+                  })
+                  .filter(Boolean);
+              }
+            } catch (error) {
+              console.warn(`[index] repo index.json unavailable for ${repoRaw}: ${error.message}`);
+            }
+
+            const folders = parseLines(await fetchText(`${repoRaw}index.txt`));
+            const entries = [];
+
+            for (const folder of folders) {
+              try {
+                const manifest = normalizeManifest(
+                  await fetchJson(buildFileUrl(repoRaw, folder, "manifest.json")),
+                );
+                if (!manifest) {
+                  console.warn(`[index] invalid manifest in ${repoRaw} :: ${folder}`);
+                  continue;
+                }
+                entries.push({
+                  repo,
+                  folder,
+                  manifest,
+                });
+              } catch (error) {
+                console.warn(
+                  `[index] failed to load manifest for ${repoRaw} :: ${folder}: ${error.message}`,
+                );
+              }
+            }
+
+            return entries;
+          }
+
+          async function main() {
+            if (!fs.existsSync(ROOT_INDEX_TXT)) {
+              throw new Error(`${ROOT_INDEX_TXT} not found`);
+            }
+
+            const repos = parseLines(fs.readFileSync(ROOT_INDEX_TXT, "utf8"));
+            const plugins = [];
+
+            for (const repo of repos) {
+              try {
+                const entries = await loadRepoEntries(repo);
+                plugins.push(...entries);
+              } catch (error) {
+                console.warn(`[index] failed to process repo ${repo}: ${error.message}`);
+              }
+            }
+
+            const output = {
+              schemaVersion: 1,
+              generatedAt: new Date().toISOString(),
+              source: ROOT_INDEX_TXT,
+              plugins,
+            };
+
+            fs.writeFileSync(
+              OUTPUT_INDEX_JSON,
+              JSON.stringify(output, null, 2) + "\n",
+              "utf8",
+            );
+
+            console.log(`Generated ${OUTPUT_INDEX_JSON} with ${plugins.length} plugin entries.`);
+          }
+
+          main().catch((error) => {
+            console.error(error);
+            process.exit(1);
           });
-
-          const indexJson = {
-            schemaVersion: 1,
-            generatedAt: new Date().toISOString(),
-            plugins,
-          };
-
-          fs.writeFileSync(
-            path.join(root, "index.json"),
-            JSON.stringify(indexJson, null, 2) + "\n",
-            "utf8",
-          );
-          fs.writeFileSync(
-            path.join(root, "index.txt"),
-            folders.join("\n") + (folders.length > 0 ? "\n" : ""),
-            "utf8",
-          );
-
-          console.log(`Generated indexes for ${folders.length} plugin folder(s).`);
           NODE
 
-      - name: Commit index files
+      - name: Commit index.json
         shell: bash
         run: |
-          if git diff --quiet -- index.json index.txt; then
+          if git diff --quiet -- index.json; then
             echo "No index changes."
             exit 0
           fi
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add index.json index.txt
+          git add index.json
           git commit -m "chore: regenerate plugin index"
           git push
