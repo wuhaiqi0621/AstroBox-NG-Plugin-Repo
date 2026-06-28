@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-06-28T10:51:50.192Z",
+  "generatedAt": "2026-06-28T13:46:43.210Z",
   "source": "index.txt",
   "plugins": [
     {
@@ -118,7 +118,7 @@
       "manifest": {
         "name": "Var课程表同步器",
         "icon": "icon.png",
-        "version": "1.4.0",
+        "version": "1.6.0",
         "description": "同步与编辑Var课程表数据",
         "author": "AzumaChiaki",
         "website": "https://github.com/AzumaChiaki/Varclass-Astrobox-rust/",
