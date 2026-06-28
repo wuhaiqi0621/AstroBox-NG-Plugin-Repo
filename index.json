@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-06-28T13:46:43.210Z",
+  "generatedAt": "2026-06-28T15:43:38.510Z",
   "source": "index.txt",
   "plugins": [
     {
@@ -238,6 +238,25 @@
         "api_level": 3,
         "permissions": [
           "register_provider"
+        ],
+        "additional_files": []
+      }
+    },
+    {
+      "repo": "https://raw.githubusercontent.com/leset0ng/ab-unlockcode/refs/heads/master/",
+      "folder": "dist",
+      "manifest": {
+        "name": "解锁码计算",
+        "icon": "icon.png",
+        "version": "1.0.0",
+        "description": "根据 MAC 与 SN 计算小米设备解锁码",
+        "author": "lesetong",
+        "website": "https://github.com/AstralSightStudios/AstroBox-NG",
+        "entry": "ab_unlockcode.wasm",
+        "wasi_version": 2,
+        "api_level": 3,
+        "permissions": [
+          "clipboard.write"
         ],
         "additional_files": []
       }
